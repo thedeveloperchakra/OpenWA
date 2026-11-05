@@ -547,5 +547,17 @@
       "ioredis": "$ioredis"
     },
     "puppeteer": "$puppeteer"
+  },
+  "allowScripts": {
+    "@parcel/watcher@2.6.0": true,
+    "@scarf/scarf@1.4.0": true,
+    "better-sqlite3@13.0.3": true,
+    "cpu-features@0.0.10": true,
+    "msgpackr-extract@3.0.4": true,
+    "protobufjs@7.6.5": true,
+    "puppeteer@25.16.0": true,
+    "ssh2@1.17.0": true,
+    "unrs-resolver@1.12.2": true,
+    "@whiskeysockets/baileys@7.0.0-rc14": true
   }
 }

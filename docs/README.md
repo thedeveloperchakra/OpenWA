@@ -118,9 +118,16 @@ Access (the dashboard is bundled into the API and served on the same port):
 - API: `http://localhost:2785/api`
 - Swagger: `http://localhost:2785/api/docs` (off under this compose file's `NODE_ENV=production` unless `ENABLE_SWAGGER=true`)
 
-### API Key
+### Dashboard Login & API Key
 
-OpenWA seeds a default API key on first run and writes it to:
+The first boot creates an admin dashboard account and prints its username (`admin`), email
+(`admin@openwa.local`) and a generated password once in the startup log. Set `ADMIN_USERNAME`,
+`ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first boot to choose them instead. Sign in at the
+dashboard with the username or email and that password; the gateway exchanges it for an API key and
+the dashboard sends that key on every request. Account management lives under `/api/auth/users`
+(admin only).
+
+OpenWA also seeds a default API key on first run and writes it to:
 
 - `data/.api-key` (development)
 - `/app/data/.api-key` inside the API container when using Docker
@@ -132,7 +139,7 @@ random `owa_k1_...` admin key is generated on first run in all environments; set
 `ALLOW_DEV_API_KEY=true` to seed the well-known `dev-admin-key` for local
 development only. Use an admin key to create additional keys with
 `POST /api/auth/api-keys` (see
-[API Specification](./06-api-specification.md#649-api-keys)).
+[API Specification](./06-api-specification.md#649-dashboard-login--api-keys)).
 
 ## API Example
 

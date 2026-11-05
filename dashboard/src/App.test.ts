@@ -19,6 +19,8 @@ function installFetchStub(): void {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const path = url.replace(/^https?:\/\/[^/]+/, '');
     requested.push(path);
+    if (path === '/api/auth/login')
+      return Promise.resolve(jsonResponse({ apiKey: 'signed-in-key', role, engineType: 'baileys', scoped }));
     if (path === '/api/auth/validate') return Promise.resolve(jsonResponse({ valid: true, role, scoped }));
     if (path === '/api/audit' || path.startsWith('/api/audit?'))
       return Promise.resolve(jsonResponse({ data: [], total: 0 }));
@@ -126,6 +128,8 @@ test('a startup validation that lands after a sign-in with another key is ignore
   let answerStale: ((res: Response) => void) | undefined;
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.endsWith('/api/auth/login'))
+      return Promise.resolve(jsonResponse({ apiKey: 'new-viewer-key', role: 'viewer', scoped: false }));
     if (url.endsWith('/api/auth/validate')) {
       if (new Headers(init?.headers).get('X-API-Key') === 'old-admin-key')
         return new Promise<Response>(resolve => (answerStale = resolve));
@@ -145,13 +149,15 @@ test('a startup validation that lands after a sign-in with another key is ignore
       return button;
     });
     rtl.fireEvent.click(logout);
-    const input = await rtl.waitFor(() => {
-      const field = document.getElementById('apiKey');
+    const identifier = await rtl.waitFor(() => {
+      const field = document.getElementById('identifier');
       assert.ok(field);
       return field;
     });
-    rtl.fireEvent.change(input, { target: { value: 'new-viewer-key' } });
-    rtl.fireEvent.submit(input.closest('form')!);
+    const password = document.getElementById('password')!;
+    rtl.fireEvent.change(identifier, { target: { value: 'viewer' } });
+    rtl.fireEvent.change(password, { target: { value: 'correct horse battery staple' } });
+    rtl.fireEvent.submit(identifier.closest('form')!);
     await rtl.waitFor(() => assert.ok(document.querySelector('a[href="/sessions"]')));
     assert.equal(logsLink() === null, true, 'the Logs nav entry is shown to a viewer');
 
@@ -215,13 +221,15 @@ test('signing out ends a bulk Number Checker run, and the next sign-in starts wi
   const { lookups, restore } = await startBulkRun();
   try {
     rtl.fireEvent.click(document.querySelector('.logout-btn')!);
-    await rtl.waitFor(() => assert.ok(document.getElementById('apiKey')));
+    await rtl.waitFor(() => assert.ok(document.getElementById('identifier')));
     await new Promise(resolve => setTimeout(resolve, 1_500));
     assert.deepEqual(lookups, ['911111111111']);
 
-    const input = document.getElementById('apiKey')!;
-    rtl.fireEvent.change(input, { target: { value: 'next-key' } });
-    rtl.fireEvent.submit(input.closest('form')!);
+    const identifier = document.getElementById('identifier')!;
+    const password = document.getElementById('password')!;
+    rtl.fireEvent.change(identifier, { target: { value: 'operator' } });
+    rtl.fireEvent.change(password, { target: { value: 'correct horse battery staple' } });
+    rtl.fireEvent.submit(identifier.closest('form')!);
     await rtl.waitFor(() => assert.ok(document.querySelector('a[href="/number-checker"]')));
     window.history.replaceState(null, '', '/number-checker');
     rtl.fireEvent.click(document.querySelector('a[href="/number-checker"]')!);

@@ -105,7 +105,8 @@ export class AuthController {
     type: [ApiKeyResponseDto],
   })
   async findAll(): Promise<ApiKeyResponseDto[]> {
-    const keys = await this.authService.findAll();
+    // Login-issued keys (`userId` set) are sessions, not credentials the operator manages here.
+    const keys = (await this.authService.findAll()).filter(k => !k.userId);
     return keys.map(k => this.toResponse(k));
   }
 

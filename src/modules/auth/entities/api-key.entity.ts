@@ -18,6 +18,13 @@ export class ApiKey {
   @Column({ type: 'varchar', length: 64 })
   keyHash!: string;
 
+  // The login account this key was minted for, or NULL for a key created through the key-management
+  // API. Login keys are sessions: disabling or deleting the owner revokes them, and they are hidden
+  // from the API-key list so the operator sees only credentials they manage directly.
+  @Index()
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  userId?: string | null;
+
   // 12 to fit the 12-char prefix that auth.service writes (was varchar(8); harmless on the
   // hardcoded-SQLite `main` connection, but kept consistent with the code).
   @Column({ type: 'varchar', length: 12 })

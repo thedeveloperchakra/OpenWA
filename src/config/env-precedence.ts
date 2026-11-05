@@ -136,6 +136,10 @@ export const BLANK_SHADOWED_ENV_KEYS: string[] = [
   'AUTO_START_SESSIONS',
   'BODY_SIZE_LIMIT',
   'API_MASTER_KEY',
+  'ADMIN_USERNAME',
+  'ADMIN_EMAIL',
+  'ADMIN_PASSWORD',
+  'USER_SESSION_TTL_DAYS',
   'TRUSTED_PROXIES',
   'CSP_UPGRADE_INSECURE_REQUESTS',
   // whatsapp-web.js launch knobs: the WhatsApp Web version pin, its remote HTML template, and the

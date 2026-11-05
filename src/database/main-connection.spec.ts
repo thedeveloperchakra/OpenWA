@@ -88,7 +88,7 @@ describe('main connection', () => {
   };
 
   const expectOneIndexPerColumn = async (ds: DataSource): Promise<void> => {
-    expect(await indexedColumns(ds, 'api_keys')).toEqual(['keyHash']);
+    expect(await indexedColumns(ds, 'api_keys')).toEqual(['keyHash', 'userId']);
     expect(await indexedColumns(ds, 'audit_logs')).toEqual(['action', 'apiKeyId', 'createdAt', 'sessionId']);
   };
 

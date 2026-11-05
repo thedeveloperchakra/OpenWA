@@ -33,10 +33,11 @@ OpenWA today is **multi-session, not multi-tenant**. What already exists and is 
 | All business data keyed by `sessionId`                                                                            | messages, audit_log, webhooks, templates                                                                    | Adding `tenantId` alongside is mechanical                                                                                        |
 | Per-request ALS actor stamping (audit attribution)                                                                | `request-context.ts`                                                                                        | Audit gains `tenantId` at the same point                                                                                         |
 
-**The gaps** (what makes it not multi-tenant today): no tenant entity, no named users or
-memberships, dashboard identity is the API key itself, all branding is global (engine device name,
-dashboard theme/logo/title), storage/backups/quota are global, and there is no tenant-scoped audit
-boundary.
+**The gaps** (what makes it not multi-tenant today): no tenant entity and no memberships. Named
+dashboard users exist (username/email + password, exchanging a login for a role-carrying API key),
+but they are deployment-global rather than tenant members, and every account sees the whole
+deployment. Branding is global (engine device name, dashboard theme/logo/title), storage/backups/quota
+are global, and there is no tenant-scoped audit boundary.
 
 ## 28.3 Definitions & mental model
 
@@ -162,7 +163,7 @@ as today.
 
 - `POST/GET/PATCH/DELETE /api/platform/tenants` (platform admin), with suspend/resume.
 - `GET/POST/PATCH/DELETE /api/tenants/:tenantId/members` (tenant owner/admin).
-- `POST /api/auth/login` (email+password), `POST /api/auth/2fa/verify`,
+- `POST /api/auth/login` (username/email+password; shipped deployment-global today, gains tenant selection), `POST /api/auth/2fa/verify`,
   `POST /api/auth/2fa/enroll`, `POST /api/auth/2fa/activate`, `POST /api/auth/2fa/backup-codes`,
   `POST /api/auth/2fa/reset` (privileged).
 - `PATCH /api/sessions/:id` gains an optional `tenantId` (assign on create/move by platform admin).
@@ -184,8 +185,8 @@ as today.
    (they become keys of the default tenant).
 2. Ship behind `MULTITENANCY_ENABLED=true` (default **off**): when off, the tenant layer is a
    no-op pass-through to the default tenant and behavior is byte-identical to today.
-3. Dashboard gains user login as an _additional_ method; API-key login stays supported
-   indefinitely.
+3. Dashboard username/password login is already shipped, deployment-global; the tenant layer adds
+tenant membership and selection to it. API-key login stays supported indefinitely.
 
 ## 28.14 Security model & test matrix
 

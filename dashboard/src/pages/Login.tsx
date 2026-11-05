@@ -13,8 +13,9 @@ interface LoginProps {
 
 export function Login({ onLogin }: LoginProps) {
   const { t, i18n } = useTranslation();
-  const [apiKey, setApiKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const currentLang = resolveSupportedLanguage(i18n.resolvedLanguage || i18n.language);
@@ -25,48 +26,47 @@ export function Login({ onLogin }: LoginProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // The stored key is matched against key prefixes elsewhere, so a pasted space must not reach it.
-    const key = apiKey.trim();
-    if (!key) {
-      setError(t('login.apiKeyRequired'));
+    const login = identifier.trim();
+    if (!login) {
+      setError(t('login.usernameOrEmailRequired'));
+      return;
+    }
+    if (!password) {
+      setError(t('login.passwordRequired'));
       return;
     }
     setIsLoading(true);
     setError('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/validate`, {
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': key,
-        },
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: login, password }),
       });
 
       if (response.ok) {
-        // The validate body already carries the key's role — hand it up so the app can set it
-        // directly instead of re-validating the same key a second time.
-        const data: { valid?: unknown; role?: string; engineType?: string; scoped?: unknown } = await response
+        const data: { apiKey?: string; role?: string; engineType?: string; scoped?: unknown } = await response
           .json()
           .catch(() => ({}));
-        // A 200 is the gateway's answer only if it says the key is valid, as the startup check requires: a reverse proxy
-        // serving the app's HTML for a misrouted /api would otherwise sign any typed text in as a viewer.
-        if (data.valid !== true) {
+        // A 200 is the gateway's answer only if it actually minted a key: a reverse proxy serving the
+        // app's HTML for a misrouted /api would otherwise sign any typed text in as a viewer.
+        if (typeof data.apiKey !== 'string' || !data.apiKey) {
           setError(t('login.connectionError'));
           return;
         }
         onLogin(
-          key,
+          data.apiKey,
           data.role,
           typeof data.engineType === 'string' ? data.engineType : undefined,
           data.scoped === true,
         );
       } else {
         // A 5xx, or a body that is not the gateway's JSON (a proxy error page while it restarts), says
-        // nothing about the key; a refusal keeps the gateway's reason (expired, revoked, rate limited).
+        // nothing about the credentials; a refusal keeps the gateway's reason (disabled account, throttled).
         const errorData: { message?: unknown } = await response.json().catch(() => ({}));
         const reason = response.status < 500 && typeof errorData.message === 'string' ? errorData.message : '';
-        setError(reason || t(response.status === 401 ? 'login.invalidKey' : 'login.connectionError'));
+        setError(reason || t(response.status === 401 ? 'login.invalidCredentials' : 'login.connectionError'));
       }
     } catch {
       setError(t('login.connectionError'));
@@ -102,29 +102,47 @@ export function Login({ onLogin }: LoginProps) {
 
         <form onSubmit={handleSubmit} className="login-form">
           <div className="input-group">
-            <label htmlFor="apiKey">{t('login.apiKey')}</label>
+            <label htmlFor="identifier">{t('login.usernameOrEmail')}</label>
             <div className="input-wrapper">
               <input
-                id="apiKey"
-                type={showKey ? 'text' : 'password'}
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                placeholder={t('login.apiKeyPlaceholder')}
+                id="identifier"
+                type="text"
+                autoComplete="username"
+                value={identifier}
+                onChange={e => setIdentifier(e.target.value)}
+                placeholder={t('login.usernameOrEmailPlaceholder')}
                 className={error ? 'error' : ''}
                 aria-invalid={error ? true : undefined}
-                aria-describedby={error ? 'apiKey-error' : undefined}
+                aria-describedby={error ? 'identifier-error' : undefined}
+              />
+            </div>
+          </div>
+
+          <div className="input-group">
+            <label htmlFor="password">{t('login.password')}</label>
+            <div className="input-wrapper">
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                autoComplete="current-password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                placeholder={t('login.passwordPlaceholder')}
+                className={error ? 'error' : ''}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? 'identifier-error' : undefined}
               />
               <button
                 type="button"
                 className="toggle-visibility"
-                onClick={() => setShowKey(!showKey)}
-                aria-label={showKey ? t('common.hideApiKey') : t('common.showApiKey')}
+                onClick={() => setShowPassword(!showPassword)}
+                aria-label={showPassword ? t('common.hideApiKey') : t('common.showApiKey')}
               >
-                {showKey ? <EyeOff size={20} /> : <Eye size={20} />}
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
               </button>
             </div>
             {error && (
-              <span id="apiKey-error" className="error-message" role="alert">
+              <span id="identifier-error" className="error-message" role="alert">
                 {error}
               </span>
             )}

@@ -56,6 +56,14 @@ sequenceDiagram
     end
 ```
 
+### Dashboard Login
+
+The dashboard (and any client that wants a short-lived credential) can sign in at the public `POST /api/auth/login` route with a **username or email** and **password**. A successful sign-in mints an ordinary API key with the account's role and returns it once; every later request authenticates with that key through the same guard and never with the password. The key is tied to the account (`api_keys.userId`), is hidden from `GET /api/auth/api-keys`, expires after `USER_SESSION_TTL_DAYS` (30 days by default; `0` disables expiry), and is revoked when the account's password, role or status changes or the account is deleted. `POST /api/auth/users` and the rest of `/api/auth/users` require an unscoped `admin` key, so a session-scoped key cannot create accounts or widen its own access.
+
+Passwords are stored as one-way **scrypt** hashes (`scrypt$<salt>$<derived key>`, 64-byte key, 16-byte salt), never in plaintext and never returned by any route. Usernames and emails are trimmed and lower-cased before storage and lookup, so matching is case-insensitive. On a non-empty `users` table the gateway does not seed anything; the first boot creates the admin account from `ADMIN_USERNAME` (default `admin`) and `ADMIN_EMAIL` (default `admin@openwa.local`), using `ADMIN_PASSWORD` when set and otherwise a generated password printed once in the startup log. Change that password after signing in by updating the account with `PUT /api/auth/users/:id`.
+
+The login route is public and therefore has no key to rate-limit or audit against; it is covered by the shared public-route body and IP throttles, and a successful sign-in writes a `USER_LOGIN` audit row. An unknown account and a wrong password answer the same `401 "Invalid username or password"`; a correct password for an inactive account answers `401 "Account is disabled"`. The last active admin account cannot be deleted, which keeps at least one path back into user management.
+
 ### API Key Format
 
 ```
@@ -122,9 +130,11 @@ found where it was saved, or replaced. Try these in order. If every key stopped 
    given any `allowedSessions` or `allowedChats`, or given `allowedIps` that exclude your address,
    the file and the banner line remain but key management is refused; go on to step 2 or 3.
 
-2. **Another ADMIN key.** Any active, unexpired `admin` key without `allowedSessions` or
-   `allowedChats`, used from an address its `allowedIps` (when set) admits, can manage keys: mint a
-   replacement with `POST /api/auth/api-keys` (`{"name": "Admin", "role": "admin"}`; the raw key is
+2. **Another ADMIN key or the dashboard account.** Any active, unexpired `admin` key without
+   `allowedSessions` or `allowedChats`, used from an address its `allowedIps` (when set) admits, can
+   manage keys. If the admin dashboard password is known, `POST /api/auth/login` mints an equivalent
+   admin key (shown once in the dashboard or the response) even when every saved key is lost. Then
+   mint a replacement with `POST /api/auth/api-keys` (`{"name": "Admin", "role": "admin"}`; the raw key is
    returned once, in `apiKey`), then revoke the lost one with `POST /api/auth/api-keys/:id/revoke`,
    or do both from the dashboard's API Keys page.
 
@@ -256,6 +266,7 @@ OpenWA serves plain HTTP on its port; terminate **TLS at your reverse proxy / lo
 
 | Data                                                                | At rest                                                                                                       | How it is protected                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dashboard passwords                                                 | **Hashed** — scrypt (64-byte key, 16-byte per-password salt); never reversible or returned | Offline guessing still needs the per-password salt, but enforce a strong password because the database alone permits it. See §4.2. |
 | API keys                                                            | **Hashed** — SHA-256 with an optional `API_KEY_PEPPER` HMAC; never reversible                                 | A database leak alone cannot recover the keys; with a pepper set, hashes can't be precomputed offline. See §4.2.                                                                                                                                                                                                                      |
 | Session auth state (WhatsApp credentials)                           | Plaintext on disk (the engine's auth store under the data volume)                                             | Filesystem permissions on the data volume — keep it private.                                                                                                                                                                                                                                                                          |
 | Webhook secrets and custom headers                                  | Plaintext: `webhooks.secret` (`varchar`) and custom `webhooks.headers` (JSON, may carry receiver credentials) | Database access control; never returned by the webhook read DTOs (write-only) and omitted from `GET /api/infra/export-data` webhook rows.                                                                                                                                                                                             |
@@ -655,6 +666,7 @@ flowchart TB
 | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Database credentials                                                         | Environment variable                                                                                                                                              | 90 days                                                            |
 | Redis password                                                               | Environment variable                                                                                                                                              | 90 days                                                            |
+| Dashboard admin password (`ADMIN_PASSWORD`)                                  | Environment variable (first boot only; stored as a scrypt hash)                                                                                                   | Change after first sign-in with `PUT /api/auth/users/:id`          |
 | API master key (`API_MASTER_KEY`)                                            | Environment variable (first-boot seed only)                                                                                                                       | Not via the env var; see the note below                            |
 | API key pepper (`API_KEY_PEPPER`)                                            | Environment variable                                                                                                                                              | Rotating it invalidates all existing key hashes (recovery in §4.4) |
 | Webhook secrets and custom headers (`webhooks.secret`, `headers`)            | Database: **plaintext** (custom headers may carry receiver credentials); not in the webhook read DTOs, and omitted from `GET /api/infra/export-data` webhook rows | Per webhook                                                        |

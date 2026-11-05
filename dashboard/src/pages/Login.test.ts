@@ -9,18 +9,18 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 
-let sentKey: string | null = null;
+let sentBody: { identifier?: string; password?: string } | null = null;
 let reply: () => Response = okReply;
 
 function okReply(): Response {
-  return new Response(JSON.stringify({ valid: true, role: 'admin' }), {
+  return new Response(JSON.stringify({ apiKey: 'owa_k1_secret', role: 'admin' }), {
     headers: { 'Content-Type': 'application/json' },
   });
 }
 
 function installFetchStub(): void {
   globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    sentKey = new Headers(init?.headers).get('X-API-Key');
+    sentBody = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
     return Promise.resolve(reply());
   }) as typeof fetch;
 }
@@ -41,28 +41,30 @@ before(async () => {
 });
 
 afterEach(() => {
-  sentKey = null;
+  sentBody = null;
   reply = okReply;
   rtl.cleanup();
 });
 
-test('a key pasted with surrounding whitespace is sent and stored trimmed', async () => {
+test('the username or email is sent trimmed with the password, and the returned key signs in', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   const logins: string[] = [];
   rtl.render(createElement(Login, { onLogin: (key: string) => logins.push(key) }));
 
-  fireEvent.change(screen.getByLabelText('API Key'), { target: { value: '  owa_k1_secret ' } });
+  fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: '  admin ' } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret' } });
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
 
   await waitFor(() => assert.equal(logins.length, 1));
   assert.deepEqual(logins, ['owa_k1_secret']);
-  assert.equal(sentKey, 'owa_k1_secret');
+  assert.deepEqual(sentBody, { identifier: 'admin', password: 'secret' });
 });
 
 async function submitAndReadError(): Promise<string> {
   const { screen, fireEvent } = rtl;
-  rtl.render(createElement(Login, { onLogin: () => assert.fail('a refused key signed in') }));
-  fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'owa_k1_secret' } });
+  rtl.render(createElement(Login, { onLogin: () => assert.fail('refused credentials signed in') }));
+  fireEvent.change(screen.getByLabelText('Username or email'), { target: { value: 'admin' } });
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'wrong' } });
   fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
   const message = await rtl.waitFor(() => {
     const el = document.querySelector('.error-message');
@@ -72,19 +74,22 @@ async function submitAndReadError(): Promise<string> {
   return message;
 }
 
-// The only feedback a failed sign-in gives is this message, so it has to reach a screen reader and name the field it
+// The only feedback a failed sign-in gives is this message, so it has to reach a screen reader and name the fields it
 // is about.
-test('a refused sign-in is announced and tied to the key field', async () => {
+test('a refused sign-in is announced and tied to the credential fields', async () => {
   reply = () => new Response('', { status: 401 });
   await submitAndReadError();
   const alert = rtl.screen.getByRole('alert');
-  assert.equal(alert.textContent, 'Invalid API key');
-  const input = rtl.screen.getByLabelText('API Key');
+  assert.equal(alert.textContent, 'Invalid username or password');
+  const input = rtl.screen.getByLabelText('Username or email');
   assert.equal(input.getAttribute('aria-invalid'), 'true');
   assert.equal(input.getAttribute('aria-describedby'), alert.id);
+  const password = rtl.screen.getByLabelText('Password');
+  assert.equal(password.getAttribute('aria-invalid'), 'true');
+  assert.equal(password.getAttribute('aria-describedby'), alert.id);
 });
 
-test('a proxy error page while the gateway is down is a connection error, not an invalid key', async () => {
+test('a proxy error page while the gateway is down is a connection error, not invalid credentials', async () => {
   reply = () => new Response('<html>502 Bad Gateway</html>', { status: 502, headers: { 'Content-Type': 'text/html' } });
   assert.equal(await submitAndReadError(), 'Unable to connect to server. Please try again.');
 });
@@ -94,14 +99,14 @@ test('a 5xx with a JSON message is still a connection error', async () => {
   assert.equal(await submitAndReadError(), 'Unable to connect to server. Please try again.');
 });
 
-test('a refused key keeps the reason the gateway gave', async () => {
-  reply = () => new Response(JSON.stringify({ statusCode: 401, message: 'API key has expired' }), { status: 401 });
-  assert.equal(await submitAndReadError(), 'API key has expired');
+test('a refused sign-in keeps the reason the gateway gave', async () => {
+  reply = () => new Response(JSON.stringify({ statusCode: 401, message: 'Account is disabled' }), { status: 401 });
+  assert.equal(await submitAndReadError(), 'Account is disabled');
 });
 
-test('a 401 without a message reads as an invalid key', async () => {
+test('a 401 without a message reads as invalid credentials', async () => {
   reply = () => new Response('', { status: 401 });
-  assert.equal(await submitAndReadError(), 'Invalid API key');
+  assert.equal(await submitAndReadError(), 'Invalid username or password');
 });
 
 // A 200 that is not the gateway's answer (a reverse proxy serving the app's HTML for a misrouted /api) or that does not

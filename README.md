@@ -189,11 +189,16 @@ docker compose -f docker-compose.dev.yml up -d
 # Swagger: http://localhost:2785/api/docs
 ```
 
-**Your API key.** The first boot generates an admin API key, prints it once in the log and stores it at
+**Sign in.** The first boot creates an admin dashboard account and prints its username (`admin`), email
+(`admin@openwa.local`) and a generated password once in the log. Set `ADMIN_USERNAME`, `ADMIN_EMAIL` and
+`ADMIN_PASSWORD` before the first boot to choose them instead. Sign in to the dashboard with the username
+or email and that password.
+
+**Your API key.** The first boot also generates an admin API key, prints it once in the log and stores it at
 `/app/data/.api-key` inside the container. Read it with `docker exec openwa-api cat /app/data/.api-key`
 (the file has no trailing newline, so the shell prompt follows the key on the same line; copy only the key),
-then use it to sign in to the dashboard and as the `X-API-Key` header wherever this README shows
-`YOUR_API_KEY`. Later boots log only a masked prefix. See [API Key](docs/README.md#api-key).
+then use it as the `X-API-Key` header wherever this README shows `YOUR_API_KEY`. Later boots log only a
+masked prefix. See [API Key](docs/README.md#api-key).
 
 > **Using Podman instead of Docker?**
 > Podman rootless mode requires the socket to be running and `DOCKER_HOST` to be set:
@@ -225,7 +230,7 @@ npm run dev
 # Swagger: http://localhost:2785/api/docs
 ```
 
-The first boot writes the admin API key to `data/.api-key` (read it with `cat data/.api-key`; the file has no trailing newline, so copy only the key).
+The first boot creates an admin dashboard account and prints its credentials once in the log, and writes the admin API key to `data/.api-key` (read it with `cat data/.api-key`; the file has no trailing newline, so copy only the key).
 
 Use `npm install` instead when intentionally changing dependencies. OpenWA's committed lockfile uses
 registry artifacts only, so npm 12 works with its secure default that blocks Git dependencies; do not
@@ -560,3 +565,6 @@ See [LICENSE](./LICENSE) for details.
 <sub>Made with ❤️ by <a href="https://github.com/rmyndharis">Yudhi Armyndharis</a> and the OpenWA Community</sub>
 
 </div>
+ Username: admin
+- Email: admin@openwa.local
+- Admin@123

@@ -51,7 +51,7 @@ A key may also be restricted to selected chats (`allowedChats`: group `<id>@g.us
 
 ### API-Key Lifecycle
 
-OpenWA seeds an initial admin key on first run (printed to the startup log and written to `data/.api-key`, or `/app/data/.api-key` in Docker). Use it to mint scoped, lower-privilege keys for integrations. Full key creation, listing, rotation, and revocation are documented under the auth resource in **§6.4.9 (API Keys)**.
+OpenWA seeds an initial admin account and an initial admin key on first run. Sign in to the dashboard with the account's username or email and its password; the login is exchanged for an API key, so every later REST call still carries `X-API-Key`. The admin key (printed to the startup log and written to `data/.api-key`, or `/app/data/.api-key` in Docker) works for scripts and to mint scoped, lower-privilege keys for integrations. Account login, user management, key creation, listing, rotation, and revocation are documented under the auth resource in **§6.4.9 (Dashboard Login & API Keys)**.
 
 ## 6.2 Response Format
 
@@ -5149,7 +5149,152 @@ No content (empty body; explicit `@HttpCode(204)`).
 
 **Errors:** `401` missing/invalid API key · `403` insufficient role · `404` webhook not found in this session
 
-### 6.4.9 API Keys
+### 6.4.9 Dashboard Login & API Keys
+
+The dashboard signs in with a username or email plus a password. On success the gateway mints a fresh API key for that account, returns its plaintext once, and the dashboard sends it as `X-API-Key` exactly like any other key. That key is tied to the account (`api_keys.userId`) with the account's role, expires after `USER_SESSION_TTL_DAYS` (30 days by default; `0` disables expiry), is hidden from the API-key list, and is revoked when the account's password, role or status changes or the account is deleted. API keys created through the management routes have no `userId` and are unaffected.
+
+The first boot creates an active `admin` account unless `users` already has a row. `ADMIN_USERNAME` (default `admin`), `ADMIN_EMAIL` (default `admin@openwa.local`) and `ADMIN_PASSWORD` choose it; when no password is set the gateway generates one and prints it once in the startup log. These settings apply only while the account table is empty.
+
+User management is under `/api/auth/users`; every route there requires an **ADMIN** API key with no session scope (the same `@RequireUnscopedKey` fence as the API-key routes), and no route accepts a chat-scoped key. Usernames and emails are trimmed and stored lower-case, so sign-in and uniqueness checks are case-insensitive. Passwords are stored as scrypt hashes and are never returned.
+
+#### POST /api/auth/login
+
+Sign in with a username or email and a password. Public route; no API key required.
+
+**Auth:** public
+
+**Request body** — `LoginDto`
+
+| Field        | Type   | Required | Constraints                                   | Description                                    |
+| ------------ | ------ | -------- | --------------------------------------------- | ---------------------------------------------- |
+| `identifier` | string | yes      | 1–255 code points; trimmed, case-insensitive  | Account username or email.                     |
+| `password`   | string | yes      | 1–200 code points                             | Account password.                              |
+
+```json
+{ "identifier": "admin", "password": "correct horse battery staple" }
+```
+
+**Response** `200` — `LoginResponseDto`
+
+```json
+{
+  "apiKey": "owa_k1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "role": "admin",
+  "engineType": "whatsapp-web.js",
+  "scoped": false
+}
+```
+
+Send `apiKey` as `X-API-Key` on later requests. The key is returned only once and is not listed by `GET /api/auth/api-keys`. `scoped` reports whether its session scope is non-empty (login keys never are).
+
+**Errors:** `401` `"Invalid username or password"` (also returned for an unknown account) or `"Account is disabled"` · `400` validation (empty field, non-string, unknown body field, more than 255/200 code points)
+
+#### GET /api/auth/users
+
+List all dashboard accounts, ordered by username ascending. Password hashes are never returned.
+
+**Auth:** API key (ADMIN, unscoped)
+
+**Response** `200`
+
+```json
+[
+  {
+    "id": "8f2a1c9e-1b2d-4a5f-9c8e-aa11bb22cc33",
+    "username": "admin",
+    "email": "admin@openwa.local",
+    "role": "admin",
+    "isActive": true,
+    "lastLoginAt": "2026-06-25T08:14:00.000Z",
+    "createdAt": "2026-06-01T10:00:00.000Z",
+    "updatedAt": "2026-06-25T08:14:00.000Z"
+  }
+]
+```
+
+`lastLoginAt` is omitted until the account signs in, and is `null` when stored without a value.
+
+**Errors:** `401` missing/invalid key · `403` key role below ADMIN, the key is session-scoped, or the key is restricted with `allowedChats`
+
+#### POST /api/auth/users
+
+Create a dashboard account.
+
+**Auth:** API key (ADMIN, unscoped)
+
+**Request body** — `CreateUserDto`
+
+| Field      | Type                                   | Required | Constraints                                                                         | Description                                      |
+| ---------- | -------------------------------------- | -------- | ----------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `username` | string                                 | yes      | 3–50 code points; unique, case-insensitive                                          | Login name, stored lower-case.                   |
+| `email`    | string                                 | yes      | valid email, at most 255 code points; unique, case-insensitive                      | Login email, stored lower-case.                  |
+| `password` | string                                 | yes      | 8–200 code points                                                                   | Password, stored as a scrypt hash.               |
+| `role`     | enum `admin` \| `operator` \| `viewer` | no       | `@IsEnum`                                                                           | Defaults to `operator`.                          |
+| `isActive` | boolean                                | no       | strict JSON boolean                                                                 | Defaults to `true`; an inactive account cannot sign in. |
+
+```json
+{ "username": "jane", "email": "jane@example.com", "password": "correct horse battery staple", "role": "operator" }
+```
+
+**Response** `201` — `UserResponseDto`
+
+Same shape as the list entry.
+
+**Errors:** `400` validation · `401` missing/invalid key · `403` key role below ADMIN, the key is session-scoped, or the key is restricted with `allowedChats` · `409` username or email already in use
+
+#### GET /api/auth/users/:id
+
+Get one dashboard account.
+
+**Auth:** API key (ADMIN, unscoped)
+
+**Path parameters**
+
+| Name | Type          | Description            |
+| ---- | ------------- | ---------------------- |
+| `id` | string (uuid) | Dashboard account id.  |
+
+**Response** `200` — `UserResponseDto`
+
+**Errors:** `401` missing/invalid key · `403` key role below ADMIN, the key is session-scoped, or the key is restricted with `allowedChats` · `404` `"User with id '<id>' not found"`
+
+#### PUT /api/auth/users/:id
+
+Update an account. Only the supplied fields change. Changing `password`, `role` or `isActive` revokes every login key for the account, including the caller's own key when it belongs to that account.
+
+**Auth:** API key (ADMIN, unscoped)
+
+**Path parameters**
+
+| Name | Type          | Description           |
+| ---- | ------------- | --------------------- |
+| `id` | string (uuid) | Dashboard account id. |
+
+**Request body** — `UpdateUserDto`
+
+Every field is optional and has the same constraints as `CreateUserDto`: `username`, `email`, `password`, `role` (`admin` | `operator` | `viewer`) and `isActive`.
+
+**Response** `200` — `UserResponseDto`
+
+**Errors:** `400` validation · `401` missing/invalid key · `403` key role below ADMIN, the key is session-scoped, or the key is restricted with `allowedChats` · `404` account not found · `409` username or email already in use
+
+#### DELETE /api/auth/users/:id
+
+Delete an account and revoke its login keys. The last active admin account cannot be deleted.
+
+**Auth:** API key (ADMIN, unscoped)
+
+**Path parameters**
+
+| Name | Type          | Description           |
+| ---- | ------------- | --------------------- |
+| `id` | string (uuid) | Dashboard account id. |
+
+**Response** `204`
+
+No content.
+
+**Errors:** `401` missing/invalid key · `403` key role below ADMIN, the key is session-scoped, or the key is restricted with `allowedChats` · `404` account not found · `409` `"Cannot delete the last active admin user"`
 
 API keys are managed under `/api/auth/api-keys`. All management routes (create/list/get/update/delete/revoke) require an **ADMIN** key **with no session scope**: the controller is fenced with `@RequireUnscopedKey`, so a key whose `allowedSessions` is non-empty is rejected with `403` whatever its role — otherwise a confined admin key could mint an unrestricted one. The guard evaluates the role requirement _before_ that fence, so a scoped VIEWER/OPERATOR key is refused with `Insufficient permissions. Required: admin`; only a scoped ADMIN key reaches the fence and sees `Session-scoped API keys are not permitted on this route`. Both are `403`. A key restricted with `allowedChats` that passes the role check is refused next, before the session fence, with `403 "API key is restricted to selected chats"`: no management route is open to a chat-scoped key. The plaintext key string is returned **only once**, at creation. Validation of the caller's own key lives at `POST /api/auth/validate` (a separate controller, not fenced) and accepts any valid key except one its `allowedIps` refuses or one restricted with `allowedChats`, each refused with `403` (the latter like every route not open to a chat-scoped key).
 

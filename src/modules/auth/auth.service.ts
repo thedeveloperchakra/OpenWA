@@ -16,7 +16,9 @@ import { randomBytes } from 'crypto';
 import { ipMatches } from '../../common/utils/ip';
 import { hashApiKey } from './api-key-hash';
 import { ApiKey, ApiKeyRole } from './entities/api-key.entity';
-import { CreateApiKeyDto, UpdateApiKeyDto } from './dto';
+import { User } from './entities/user.entity';
+import { CreateApiKeyDto, UpdateApiKeyDto, CreateUserDto, UpdateUserDto } from './dto';
+import { hashPassword, verifyPassword } from './password-hash';
 import { createLogger } from '../../common/services/logger.service';
 import { setRequestActor } from '../../common/services/request-context';
 import { bootstrapKeyFilePath, readBootstrapKey, removeBootstrapKey, writeBootstrapKey } from './bootstrap-key-file';
@@ -87,6 +89,11 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     private readonly usageTracker: ApiKeyUsageTracker,
     private readonly moduleRef: ModuleRef,
     @Optional() private readonly keyIndex?: ActiveKeyIndex,
+    // Optional so the API-key unit tests (and any embedding that never mounts user login) can build
+    // the service without a users table. The auth module always provides it at runtime.
+    @Optional()
+    @InjectRepository(User, 'main')
+    private readonly userRepository?: Repository<User>,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -114,6 +121,8 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       displayKey = (await this.readLiveBootstrapKey()) ?? '(check dashboard for keys)';
     }
 
+    const seededUser = await this.ensureDefaultAdminUser();
+
     // Always show the welcome banner on startup
     const apiBaseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 2785}`;
     // The dashboard is served by NestJS at the same origin as the API now, so default to it.
@@ -136,9 +145,50 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       this.logger.log('  🔑 API Key:');
     }
     this.logger.log(`     ${bannerKeyLine(displayKey, isNewKey)}`);
+    if (seededUser) {
+      this.logger.log('');
+      this.logger.log('  👤 Dashboard login (newly created):');
+      this.logger.log(`     Username: ${seededUser.user.username}`);
+      this.logger.log(`     Email:    ${seededUser.user.email}`);
+      this.logger.log(`     Password: ${seededUser.password}`);
+    }
     this.logger.log('');
     this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     this.logger.log('');
+  }
+
+  /**
+   * Seed one ADMIN login account when the users table is empty. Credentials come from
+   * ADMIN_USERNAME / ADMIN_EMAIL / ADMIN_PASSWORD when set; a missing password is generated and
+   * shown once in the banner, matching how the first-boot API key is handled.
+   */
+  private async ensureDefaultAdminUser(): Promise<{ user: User; password: string } | null> {
+    if (!this.userRepository) return null;
+    const count = await this.userRepository.count();
+    if (count > 0) return null;
+
+    const username = (process.env.ADMIN_USERNAME?.trim() || 'admin').toLowerCase();
+    const email = (process.env.ADMIN_EMAIL?.trim() || 'admin@openwa.local').toLowerCase();
+    const password = process.env.ADMIN_PASSWORD || randomBytes(18).toString('base64url');
+
+    try {
+      const user = await this.userRepository.save(
+        this.userRepository.create({
+          username,
+          email,
+          passwordHash: await hashPassword(password),
+          role: ApiKeyRole.ADMIN,
+          isActive: true,
+        }),
+      );
+      this.logger.log(`Default admin user created: ${username}`, { userId: user.id, action: 'user_created' });
+      return { user, password };
+    } catch (err) {
+      // A username/email collision can only happen on a race between two first boots; the existing
+      // account must win, and the operator can reset its password through the users API.
+      this.logger.warn('Could not create the default admin user', { error: String(err) });
+      return null;
+    }
   }
 
   /** Flush the coalesced usage counters before the DB connection closes. See ApiKeyUsageTracker. */
@@ -202,6 +252,191 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     });
 
     return this.apiKeyRepository.save(apiKey);
+  }
+
+  private requireUserRepository(): Repository<User> {
+    if (!this.userRepository) {
+      throw new Error('User accounts are not available: the users repository is not configured');
+    }
+    return this.userRepository;
+  }
+
+  private static normalizeIdentifier(value: string): string {
+    return value.trim().toLowerCase();
+  }
+
+  private toLoginKeyName(user: User): string {
+    return `Login: ${user.username}`;
+  }
+
+  /**
+   * Verify a username/email + password and exchange it for a fresh API key carrying the account's
+   * role. The key is a login session: it is tied to `userId`, expires after USER_SESSION_TTL_DAYS
+   * (30 by default, 0 disables expiry), and is revoked when the account is disabled or deleted.
+   */
+  async login(identifier: string, password: string): Promise<{ apiKey: ApiKey; rawKey: string; user: User }> {
+    const users = this.requireUserRepository();
+    const normalized = AuthService.normalizeIdentifier(identifier);
+    const user = await users.findOne({
+      where: [{ username: normalized }, { email: normalized }],
+    });
+
+    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+      throw new UnauthorizedException('Invalid username or password');
+    }
+    if (!user.isActive) {
+      throw new UnauthorizedException('Account is disabled');
+    }
+
+    user.lastLoginAt = new Date();
+    await users.update({ id: user.id }, { lastLoginAt: user.lastLoginAt });
+
+    const { apiKey, rawKey } = await this.createLoginKey(user);
+    this.logger.log(`User signed in: ${user.username}`, {
+      userId: user.id,
+      action: 'user_login',
+    });
+    return { apiKey, rawKey, user };
+  }
+
+  private static sessionTtlHours(): number {
+    const raw = Number(process.env.USER_SESSION_TTL_DAYS ?? 30);
+    if (!Number.isFinite(raw) || raw < 0) return 30;
+    return raw * 24;
+  }
+
+  private async createLoginKey(user: User): Promise<{ apiKey: ApiKey; rawKey: string }> {
+    const rawKey = `owa_k1_${randomBytes(32).toString('hex')}`;
+    const keyHash = this.hashKey(rawKey);
+    const keyPrefix = rawKey.substring(0, 12);
+    const ttlHours = AuthService.sessionTtlHours();
+    const expiresAt = ttlHours > 0 ? new Date(Date.now() + ttlHours * 60 * 60 * 1000) : null;
+
+    // Drop this account's already-expired login keys so repeated sign-ins cannot accumulate rows.
+    await this.apiKeyRepository
+      .createQueryBuilder()
+      .delete()
+      .from(ApiKey)
+      .where('"userId" = :userId', { userId: user.id })
+      .andWhere('"expiresAt" IS NOT NULL AND "expiresAt" <= :now', { now: AuthService.guardNowParam() })
+      .execute();
+
+    const apiKey = await this.apiKeyRepository.save(
+      this.apiKeyRepository.create({
+        name: this.toLoginKeyName(user),
+        keyHash,
+        keyPrefix,
+        role: user.role,
+        userId: user.id,
+        expiresAt,
+      }),
+    );
+    this.keyIndex?.refreshSoon();
+    return { apiKey, rawKey };
+  }
+
+  /** Delete every login key belonging to an account and eject its live WebSocket sockets. */
+  async revokeLoginKeysForUser(userId: string): Promise<void> {
+    const keys = await this.apiKeyRepository.find({ where: { userId }, select: { id: true } });
+    if (keys.length === 0) return;
+    await this.apiKeyRepository.delete({ userId });
+    for (const key of keys) {
+      this.usageTracker.forget(key.id);
+      this.evictActiveSockets(key.id, 'revoked');
+    }
+    this.keyIndex?.refreshSoon();
+  }
+
+  async createUser(dto: CreateUserDto): Promise<User> {
+    const users = this.requireUserRepository();
+    const username = AuthService.normalizeIdentifier(dto.username);
+    const email = AuthService.normalizeIdentifier(dto.email);
+
+    const existing = await users.findOne({ where: [{ username }, { email }] });
+    if (existing) {
+      throw new ConflictException(
+        existing.username === username
+          ? `Username '${username}' is already in use`
+          : `Email '${email}' is already in use`,
+      );
+    }
+
+    const user = await users.save(
+      users.create({
+        username,
+        email,
+        passwordHash: await hashPassword(dto.password),
+        role: dto.role ?? ApiKeyRole.OPERATOR,
+        isActive: dto.isActive ?? true,
+      }),
+    );
+    this.logger.log(`User created: ${user.username}`, { userId: user.id, action: 'user_created' });
+    return user;
+  }
+
+  async findAllUsers(): Promise<User[]> {
+    return this.requireUserRepository().find({ order: { username: 'ASC' } });
+  }
+
+  async findUser(id: string): Promise<User> {
+    const user = await this.requireUserRepository().findOne({ where: { id } });
+    if (!user) throw new NotFoundException(`User with id '${id}' not found`);
+    return user;
+  }
+
+  async updateUser(id: string, dto: UpdateUserDto): Promise<User> {
+    const users = this.requireUserRepository();
+    await this.findUser(id);
+
+    const username = dto.username !== undefined ? AuthService.normalizeIdentifier(dto.username) : undefined;
+    const email = dto.email !== undefined ? AuthService.normalizeIdentifier(dto.email) : undefined;
+    if (username !== undefined || email !== undefined) {
+      const clash = await users.findOne({
+        where: [...(username !== undefined ? [{ username }] : []), ...(email !== undefined ? [{ email }] : [])],
+      });
+      if (clash && clash.id !== id) {
+        throw new ConflictException(
+          clash.username === username
+            ? `Username '${username}' is already in use`
+            : `Email '${email}' is already in use`,
+        );
+      }
+    }
+
+    const patch: QueryDeepPartialEntity<User> = {};
+    if (username !== undefined) patch.username = username;
+    if (email !== undefined) patch.email = email;
+    if (dto.password !== undefined) patch.passwordHash = await hashPassword(dto.password);
+    if (dto.role !== undefined) patch.role = dto.role;
+    if (dto.isActive !== undefined) patch.isActive = dto.isActive;
+
+    if (Object.keys(patch).length > 0) {
+      await users.update({ id }, patch);
+    }
+
+    const saved = await this.findUser(id);
+    // A password, role or status change invalidates every existing login session for the account.
+    if (dto.password !== undefined || dto.role !== undefined || dto.isActive !== undefined) {
+      await this.revokeLoginKeysForUser(id);
+    }
+    this.logger.log(`User updated: ${saved.username}`, { userId: saved.id, action: 'user_updated' });
+    return saved;
+  }
+
+  async deleteUser(id: string): Promise<void> {
+    const users = this.requireUserRepository();
+    const user = await this.findUser(id);
+
+    if (user.role === ApiKeyRole.ADMIN && user.isActive) {
+      const otherAdmins = await users.count({ where: { role: ApiKeyRole.ADMIN, isActive: true } });
+      if (otherAdmins <= 1) {
+        throw new ConflictException('Cannot delete the last active admin user');
+      }
+    }
+
+    await this.revokeLoginKeysForUser(id);
+    await users.delete({ id });
+    this.logger.log(`User deleted: ${user.username}`, { userId: id, action: 'user_deleted' });
   }
 
   async createApiKey(dto: CreateApiKeyDto): Promise<{ apiKey: ApiKey; rawKey: string }> {
