@@ -109,23 +109,16 @@ test('a 401 without a message reads as invalid credentials', async () => {
   assert.equal(await submitAndReadError(), 'Invalid username or password');
 });
 
-// A 200 that is not the gateway's answer (a reverse proxy serving the app's HTML for a misrouted /api) or that does not
-// say the key is valid signed in any typed text as a viewer, and every page then failed its first read.
+// A 200 that is not the gateway's answer (a reverse proxy serving the app's HTML for a misrouted /api) or that carries
+// anything other than a minted key signed any typed text in as a viewer, and every page then failed its first read.
 for (const [label, body] of [
   ['an HTML page', '<!doctype html><title>OpenWA</title>'],
-  ['valid: false', JSON.stringify({ valid: false })],
+  ['no apiKey', JSON.stringify({ valid: false })],
 ] as const) {
   test(`a 200 carrying ${label} is a connection error, not a sign-in`, async () => {
-    const { screen, fireEvent } = rtl;
     reply = () => new Response(body, { status: 200 });
-    // Recorded, not thrown: the form's own catch would turn a throw here into the very error this test expects.
-    const logins: string[] = [];
-    rtl.render(createElement(Login, { onLogin: (key: string) => logins.push(key) }));
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'owa_k1_secret' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
-    await rtl.waitFor(() => assert.ok(logins.length > 0 || document.querySelector('.error-message')));
-    assert.deepEqual(logins, [], 'the answer signed the key in');
-    assert.equal(screen.getByRole('alert').textContent, 'Unable to connect to server. Please try again.');
+    // submitAndReadError fails the test if onLogin runs, so a body without a key cannot sign in.
+    assert.equal(await submitAndReadError(), 'Unable to connect to server. Please try again.');
   });
 }
 
