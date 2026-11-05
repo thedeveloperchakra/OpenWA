@@ -303,6 +303,15 @@ async function downloadPinnedHtml(remotePath: string, fetcher: typeof fetch): Pr
     if (html.length < PINNED_HTML_MIN_LENGTH || !/<html/i.test(html)) {
       throw new Error('the response is not a WhatsApp Web page');
     }
+    // The registry occasionally captures WhatsApp Web's lightweight logged-out shell
+    // (`<html id="whatsapp-web-logged-out">`) instead of the app page. It still renders a QR code,
+    // but it never registers the lazy modules whatsapp-web.js drives, so injecting into it fails
+    // with `Cannot read properties of null (reading 'Socket')` (WAWebSocketModel resolves to null).
+    // Treat it as an unusable pin, exactly like a failed download: the session then loads the live
+    // build instead of failing terminally.
+    if (/<html[^>]*\bid\s*=\s*["']whatsapp-web-logged-out["']/i.test(html)) {
+      throw new Error('the page is the logged-out landing shell, not the WhatsApp Web app');
+    }
     pinnedHtml.clear();
     pinnedHtml.set(remotePath, html);
     return html;

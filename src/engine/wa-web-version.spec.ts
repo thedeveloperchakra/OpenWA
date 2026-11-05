@@ -374,6 +374,11 @@ describe('resolveWebVersionPin with a cache directory', () => {
     ['a non-ok status', page(HTML, 404), 'HTTP 404'],
     ['a body too short to be the page', page('<html></html>'), 'not a WhatsApp Web page'],
     ['a body that is not HTML', page('x'.repeat(4096)), 'not a WhatsApp Web page'],
+    [
+      'the logged-out landing shell',
+      page(`<!DOCTYPE html><html id="whatsapp-web-logged-out"><body>${'x'.repeat(2048)}</body></html>`),
+      'logged-out landing shell',
+    ],
   ])('drops the pin on %s and writes nothing', async (_label, response, reason) => {
     const fetcher = jest.fn(() => Promise.resolve(response));
 
