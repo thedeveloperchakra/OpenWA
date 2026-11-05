@@ -16,8 +16,8 @@
   overflow-y: auto;
 }
 
-/* The card and the footer centre as one group with auto margins, not justify-content: when the window is
-   shorter than the group the margins give way and the container scrolls from its top edge. */
+/* The card centres with auto margins, not justify-content: when the window is shorter than the card
+   the margins give way and the container scrolls from its top edge. */
 .login-container .login-card {
   background: var(--bg-white);
   border-radius: 12px;
@@ -27,6 +27,7 @@
   max-width: 420px;
   text-align: center;
   margin-top: auto;
+  margin-bottom: auto;
 }
 
 .login-container .login-logo {
@@ -185,37 +186,6 @@
 
 .login-container .login-help a:hover {
   text-decoration: underline;
-}
-
-.login-container .login-footer {
-  margin-top: 2rem;
-  margin-bottom: auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  text-align: center;
-}
-
-.login-container .login-footer .github-link {
-  color: var(--text-muted);
-  transition: color 0.2s;
-}
-
-.login-container .login-footer .github-link:hover {
-  color: var(--primary-text);
-}
-
-.login-container .login-footer a {
-  color: var(--text-muted);
-  font-size: 0.75rem;
-  text-decoration: none;
-}
-
-.login-container .login-footer a:hover {
-  color: var(--text-secondary);
 }
 
 /* Mobile Responsive */
